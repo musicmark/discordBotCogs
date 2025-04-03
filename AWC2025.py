@@ -14,17 +14,50 @@ else:
     exit()
 
 votes = {}
+admin = [622098032854433813, 1009612327236157511]
+
+class PlayerCheckButton(ui.View):
+    def __init__(self, vote_name, bet_player, token, bet_token, plus):
+        super().__init__()
+        self.vote_name = vote_name
+        self.bet_player = bet_player
+        self.token = token
+        self.bet_token = bet_token
+        self.plus = plus
+    
+    @ui.button(label="네", style=ButtonStyle.blurple, custom_id="PlayerCheckButton:yes_button")
+    async def yes_button(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer()
+        interaction.followup
+        with open(f"{file_path}/data/event/AWC2025/tokens/{interaction.user.id}.bin", 'wb') as f:
+            f.write((self.token - self.bet_token).to_bytes(((self.token - self.bet_token).bit_length() + 7) // 8, byteorder="little"))
+        if self.plus:
+            old_bet_token = votes[self.vote_name][self.bet_player]["bet_users"][str(interaction.user.id)]
+            votes[self.vote_name][self.bet_player]["bet_users"][str(interaction.user.id)] += self.bet_token
+        else:
+            votes[self.vote_name][self.bet_player]["bet_users"][str(interaction.user.id)] = self.bet_token
+        votes[self.vote_name]["token_total"] += self.bet_token
+        votes[self.vote_name][self.bet_player]["token"] += self.bet_token
+        if votes[self.vote_name][self.bet_player]["max_token"] < self.bet_token:
+            votes[self.vote_name][self.bet_player]["max_token"] = self.bet_token
+        '' if str(interaction.user.id) in votes[self.vote_name]["bet_users"] else votes[self.vote_name]["bet_users"].append(interaction.user.id)
+        await interaction.followup.send(f"{votes[self.vote_name][self.bet_player]["name"]}의 승리를 예측하였습니다.\n({f"{old_bet_token:,} + {self.bet_token:,}" if self.plus else f"{self.bet_token:,}"}<:AWC_token:1332385291054612500> 사용됨.)", ephemeral=True)
+    
+    @ui.button(label="취소 : 메시지 닫기", style=ButtonStyle.grey, disabled=True)
+    async def disabled_button(self):
+        pass
 
 class VotingTokenInputModal(ui.Modal):
     def __init__(self, vote_name, bet_player, token, plus, user=None):
-        super().__init__(title="배팅할 토큰 수 입력", timeout=3600)
+        super().__init__(title=f"{votes[vote_name][bet_player]["name"]}에게 베팅할 토큰 수 입력", timeout=3600)
         self.vote_name = vote_name
         self.bet_player = bet_player
         self.token = token
         self.plus = plus
+        self.user = user
         if plus:
-            old_token = votes[vote_name][bet_player]["bet_users"][user]
-        self.add_item(ui.TextInput(label=f"배팅할 토큰 수 {f"(이전에 배팅한 토큰 수 : {old_token})" if plus else ""}", placeholder=f"본인의 토큰 보유 수({token:,})", style=discord.TextStyle.short))
+            self.old_token = votes[vote_name][bet_player]["bet_users"][user]
+        self.add_item(ui.TextInput(label=f"베팅할 토큰 수 {f"(이전에 베팅한 토큰 수 : {votes[vote_name][bet_player]["bet_users"][user]})" if plus else ""}", placeholder=f"본인의 토큰 보유 수({token:,})", style=discord.TextStyle.short))
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -39,19 +72,8 @@ class VotingTokenInputModal(ui.Modal):
         if bet_token > self.token:
             await interaction.followup.send("입력한 토큰 수가 보유한 토큰 수 보다 많습니다.", ephemeral=True)
             return
-        with open(f"{file_path}/data/event/AWC2025/tokens/{interaction.user.id}.bin", 'wb') as f:
-            f.write((self.token - bet_token).to_bytes(((self.token - bet_token).bit_length() + 7) // 8, byteorder="little"))
-        if self.plus:
-            old_bet_token = votes[self.vote_name][self.bet_player]["bet_users"][str(interaction.user.id)]
-            votes[self.vote_name][self.bet_player]["bet_users"][str(interaction.user.id)] += bet_token
-        else:
-            votes[self.vote_name][self.bet_player]["bet_users"][str(interaction.user.id)] = bet_token
-        votes[self.vote_name]["token_total"] += bet_token
-        votes[self.vote_name][self.bet_player]["token"] += bet_token
-        if votes[self.vote_name][self.bet_player]["max_token"] < bet_token:
-            votes[self.vote_name][self.bet_player]["max_token"] = bet_token
-        '' if str(interaction.user.id) in votes[self.vote_name]["bet_users"] else votes[self.vote_name]["bet_users"].append(interaction.user.id)
-        await interaction.followup.send(f"{votes[self.vote_name][self.bet_player]["name"]}의 승리를 예측하였습니다.\n({f"{old_bet_token:,} + {bet_token:,}" if self.plus else f"{bet_token:,}"}<:AWC_token:1332385291054612500> 사용됨.)", ephemeral=True)
+        await interaction.followup.send(f"{votes[self.vote_name][self.bet_player]["name"]}에게 {bet_token:,}<:AWC_token:1332385291054612500>을 베팅하시겠습니까?{f"\n이전에 베팅한 토큰 수 : {self.old_token:,}" if self.plus else ""}", view=PlayerCheckButton(self.vote_name, self.bet_player, self.token, bet_token, self.plus), ephemeral=True)
+        
 
 class VotingButtonTournament(ui.View):
     def __init__(self, p1, p2, vote_name):
@@ -208,21 +230,22 @@ class VotingTaskLoop(commands.Cog):
 
     @tasks.loop(seconds=10)
     async def reload_vote(self):
-        with open(f"{file_path}/data/event/AWC2025/vote/vote_list.json", 'r', encoding='utf-8') as f:
-            vote_list = json.load(f)
-        for name in vote_list:
-            for i in range(votes[name]["players"]):
-                if votes[name][f"p{i+1}"]["max_token"] is not int:
-                    votes[name][f"p{i+1}"]["max_token"] = max(votes[name][f"p{i+1}"]["bet_users"].values(), default=0)
-            with open(f"{file_path}/data/event/AWC2025/vote/{name}.json", 'w', encoding='utf-8') as f:
-                json.dump(votes[name],f, indent="\t", ensure_ascii=False)
-            if datetime.datetime.now().timestamp() >= votes[name]["end_time"]:
-                with open(f"{file_path}/data/event/AWC2025/vote/vote_list.json", 'r', encoding='utf-8') as f:
-                    vote_list = json.load(f)
-                vote_list.remove(name)
-                with open(f"{file_path}/data/event/AWC2025/vote/vote_list.json", 'w', encoding='utf-8') as f:
-                    json.dump(vote_list, f, indent="\t", ensure_ascii=False)
-                await self.bot.get_channel(1314462074260164680).send(f"**{name}**의 배팅이 종료되었습니다.")
+        if self.bot.is_ready():
+            with open(f"{file_path}/data/event/AWC2025/vote/vote_list.json", 'r', encoding='utf-8') as f:
+                vote_list = json.load(f)
+            for name in vote_list:
+                for i in range(votes[name]["players"]):
+                    if votes[name][f"p{i+1}"]["max_token"] is not int:
+                        votes[name][f"p{i+1}"]["max_token"] = max(votes[name][f"p{i+1}"]["bet_users"].values(), default=0)
+                with open(f"{file_path}/data/event/AWC2025/vote/{name}.json", 'w', encoding='utf-8') as f:
+                    json.dump(votes[name],f, indent="\t", ensure_ascii=False)
+                if datetime.datetime.now().timestamp() >= votes[name]["end_time"]:
+                    with open(f"{file_path}/data/event/AWC2025/vote/vote_list.json", 'r', encoding='utf-8') as f:
+                        vote_list = json.load(f)
+                    vote_list.remove(name)
+                    with open(f"{file_path}/data/event/AWC2025/vote/vote_list.json", 'w', encoding='utf-8') as f:
+                        json.dump(vote_list, f, indent="\t", ensure_ascii=False)
+                    await self.bot.get_channel(1314462074260164680).send(f"**{name}**의 베팅이 종료되었습니다.")
 
 class VotesMenu(ui.Select):
     def __init__(self):
@@ -236,11 +259,11 @@ class VotesMenu(ui.Select):
         text += "\n# ⠀\n## 실시간 예측 현황\n"
         for i in range(vote["players"]):
             if vote[f"p{i+1}"]["token"] == 0:
-                text += f"{vote[f'p{i+1}']['name']} : 0% (최고 배팅 토큰 수 : 0)\n"
+                text += f"{vote[f'p{i+1}']['name']} : 0% (최고 베팅 토큰 수 : 0)\n"
                 continue
-            text += f"{vote[f"p{i+1}"]["name"]} : {round(vote[f"p{i+1}"]["token"] / vote["token_total"] * 100 if vote["token_total"] or vote[f"p{i+1}"]["token"] else 0, 2)}% (최고 배팅 토큰 수 : {vote[f"p{i+1}"]["max_token"]:,})\n"
+            text += f"{vote[f"p{i+1}"]["name"]} : {round(vote[f"p{i+1}"]["token"] / vote["token_total"] * 100 if vote["token_total"] or vote[f"p{i+1}"]["token"] else 0, 2)}% (최고 베팅 토큰 수 : {vote[f"p{i+1}"]["max_token"]:,})\n"
         not_end = vote["end_time"] >= datetime.datetime.now().timestamp()
-        text += "\n승리를 예상하는 선수의 이름이 적힌 버튼을 눌러주세요!" if not_end else "\n-# 해당 예측은 배팅 기간이 아닙니다."
+        text += "\n승리를 예상하는 선수의 이름이 적힌 버튼을 눌러주세요!" if not_end else "\n-# 해당 예측은 베팅 기간이 아닙니다."
         await interaction.response.send_message(text, ephemeral=True, view=(VotingButtonGroup(vote[f"p1"]["name"], vote[f"p2"]["name"], vote[f"p3"]["name"], vote[f"p4"]["name"] if vote["players"] >= 4 else None, self.values[0].replace("_", " ")) if vote["players"] >= 3 else VotingButtonTournament(vote["p1"]["name"], vote["p2"]["name"], self.values[0].replace("_", " "))) if not_end else None)
 
 class Votes(ui.View):
@@ -294,7 +317,7 @@ class Main(ui.View):
             with open(f"{file_path}/data/event/AWC2025/vote/vote_list.json", 'r', encoding='utf-8') as f:
                 vote_list = json.load(f)
             if len(vote_list) == 0:
-                await interaction.followup.send("현제 진행중인 배팅이 없습니다.", ephemeral=True)
+                await interaction.followup.send("현제 진행중인 베팅이 없습니다.", ephemeral=True)
                 return
             await interaction.followup.send("참여할 예측을 선택 해주세요!", view=Votes(), ephemeral=True)
         except Exception as e:
@@ -320,7 +343,7 @@ class Main(ui.View):
 class AWC2025Commands(app_commands.Group):
     @app_commands.command(name="create_vote")
     async def create_vote(self, interaction, name: str, vote_end_time: int, p1: str, p2: str, p3: str=None, p4: str=None):
-        if interaction.user.id == 622098032854433813:
+        if interaction.user.id in admin:
             if vote_end_time <= int(datetime.datetime.now().timestamp()) or vote_end_time >= int(datetime.datetime(2025,3,1).timestamp()):
                 await interaction.response.send_message("시간값이 올바르지 않습니다.")
                 return
@@ -345,7 +368,7 @@ class AWC2025Commands(app_commands.Group):
 
     @app_commands.command(name="start")
     async def start(self, interaction):
-        if interaction.user.id == 622098032854433813:
+        if interaction.user.id in admin:
             channel = interaction.guild.get_channel(1317911593929146509)
             await channel.send("AWC 승부예측에 참여 해보세요!", view=Main())
         else:
@@ -353,7 +376,7 @@ class AWC2025Commands(app_commands.Group):
 
     @app_commands.command(name="vote_end")
     async def vote_end(self, interaction, name: str, p1_rank: int, p2_rank: int, p3_rank: int = None, p4_rank: int = None):
-        if interaction.user.id == 622098032854433813:
+        if interaction.user.id in admin:
             await interaction.response.defer()
             interaction.followup
             vote_list = os.listdir(f"{file_path}/data/event/AWC2025/vote")
@@ -371,7 +394,7 @@ class AWC2025Commands(app_commands.Group):
                     rank=[p[1] for p in r][0:2]
                     winer_token = sum([data[p]["token"] for p in rank])
                 else:
-                    rank=[p[1] for p in r][0]
+                    rank=[[p[1] for p in r][0]]
                     winer_token = data[rank[0]]["token"]
                 for player in rank:
                     if not data[player]["token"]:
@@ -382,17 +405,41 @@ class AWC2025Commands(app_commands.Group):
                         with open(f"{file_path}/data/event/AWC2025/tokens/{user_id}.bin", 'wb') as f:
                             p = int(token + (data["token_total"] * (data[player]["bet_users"][user_id] / winer_token)))
                             f.write(p.to_bytes((p.bit_length() + 7) // 8, byteorder="little"))
-
+    
                 del votes[name]
                 await interaction.followup.send(f"{name} 예측이 종료되었습니다.")
             else:
                 await interaction.response.send_message("Name error.")
         else:
             await interaction.response.send_message("you don't have command permissions")
+            
+    @app_commands.command(name="bonus")
+    async def bonus(self, interaction, vote_name: str, player_num: int, token: int):
+        if interaction.user.id in admin:
+            await interaction.response.defer()
+            interaction.followup
+            vote_list = os.listdir(f"{file_path}/data/event/AWC2025/vote")
+            if f"{vote_name}.json" in vote_list:
+                with open(f"{file_path}/data/event/AWC2025/vote/{vote_name}.json") as f:
+                    vote_data = json.load(f)
+                if f"p{player_num}" in vote_data:
+                    bet_users = list(vote_data[f"p{player_num}"]["bet_users"])
+                    for bet_user in bet_users:
+                        with open(f"{file_path}/data/event/AWC2025/tokens/{bet_user}.bin", 'rb') as f:
+                            old_token = int.from_bytes(f.read(), byteorder="little")
+                        with open(f"{file_path}/data/event/AWC2025/tokens/{bet_user}.bin", 'wb') as f:
+                            f.write((old_token + token).to_bytes(((1000).bit_length() + 7) // 8, byteorder="little"))
+                    await interaction.followup.send(f"{vote_name}의 {player_num}번 선수의 보너스 지급이 완료되었습니다.")
+                else:
+                    await interaction.followup.send("선수 번호가 올바르지 않습니다.")
+            else:
+                await interaction.followup.send("존재하지 않는 베팅입니다.")
+        else:
+            await interaction.response.send_message("you don't have command permissions.")
 
     @app_commands.command(name="add_token")
     async def add_token(self, interaction, user: discord.Member, token: int):
-        if interaction.user.id == 622098032854433813:
+        if interaction.user.id in admin:
             with open(f"{file_path}/data/event/AWC2025/tokens/{user.id}.bin", 'rb') as f:
                 old_token = int.from_bytes(f.read(), byteorder="little")
             with open(f"{file_path}/data/event/AWC2025/tokens/{user.id}.bin", 'wb') as f:
@@ -403,7 +450,7 @@ class AWC2025Commands(app_commands.Group):
     
     @app_commands.command(name="remove_token")
     async def remove_token(self, interaction, user: discord.Member, token: int):
-        if interaction.user.id == 622098032854433813:
+        if interaction.user.id in admin:
             with open(f"{file_path}/data/event/AWC2025/tokens/{user.id}.bin", 'rb') as f:
                 old_token = int.from_bytes(f.read(), byteorder="little")
             if old_token >= token:
@@ -418,7 +465,7 @@ class AWC2025Commands(app_commands.Group):
     @app_commands.command(name="rank")
     async def rank(self, interaction, channel: discord.TextChannel):
         message = None
-        if interaction.user.id == 622098032854433813:
+        if interaction.user.id in admin:
             error = 0
             while True:
                 try:
@@ -448,46 +495,28 @@ class AWC2025Commands(app_commands.Group):
                         raise "rank command is not working"
                     await asyncio.sleep(30)
 
-    @app_commands.command(name="exec")
+    @app_commands.command(name="eval")
     async def run_exec(self, interaction: discord.Interaction, code: str):
-        if interaction.user.id == 622098032854433813:  # Replace with your ID
+        if interaction.user.id in admin:  # Replace with your ID
             await interaction.response.defer()
-            interaction.followup
-
             try:
-                # Define the async function and execute the code
-                exec(
-                    f'async def __ex():\n' +
-                    '\n'.join(f'    {line}' for line in code.split('\n')),
-                    globals(),
-                    globals()
-                )
-
-                # Retrieve the function from the global namespace
-                func = globals()['__ex']
-
-                # Execute the function
-                result = await func()
-
-                # Fetch all variables declared in the exec context (excluding function)
-                declared_vars = {k: v for k, v in globals().items() if not k.startswith('__')}
-
-                if len(str(result)) + len(str(declared_vars)) >= 1999:
+                result = eval(code, globals())  # ✅ eval 사용하여 코드 실행
+    
+                if len(str(result)) >= 1999:  # ✅ 실행 결과만 고려
                     with io.StringIO() as f:
-                        f.write(f"Execution Result: {result}\nDeclared Variables: {declared_vars}")
+                        f.write(str(result))  # ✅ result 값만 저장
                         f.seek(0)
                         file = discord.File(f, filename="exec_output.txt")
                         await interaction.followup.send("Output is too long. Here is the file:", file=file)
-
-                # Send the result and declared variables
-                await interaction.followup.send(
-                    f"Execution Result: {result}\nDeclared Variables: {declared_vars}"
-                )
+                        return  # ✅ 두 번째 send() 실행 방지
+    
+                await interaction.followup.send(f"Execution Result: {result}")
             except Exception as e:
-                # Send any errors that occur during execution
                 await interaction.followup.send(f"Error: {e}")
         else:
             await interaction.response.send_message("You don't have command permissions.")
+
+
 
 
 async def setup(bot: commands.Bot):
@@ -498,5 +527,5 @@ async def setup(bot: commands.Bot):
     for name in vote_list:
         with open(f"{file_path}/data/event/AWC2025/vote/{name}.json", 'r', encoding='utf-8') as f:
             votes[name] = json.load(f)
-    print("votes was loaded\n{}".join(vote_list))
+        print(f"{name} is loaded")
     print("AWC2025 is now available")
